@@ -1,4 +1,4 @@
-name: Build Finway V48.2 Debug APK
+name: Build Finway Debug APK
 
 on:
   workflow_dispatch:
@@ -7,48 +7,53 @@ on:
     branches:
       - main
     paths:
-      - "FINWAY_SOURCE_V48_2_NAVIGATION_MEMORY.zip"
-      - ".github/workflows/build-apk-v48-2-navigation-memory.yml"
+      - "FINWAY_SOURCE.zip"
+      - ".github/workflows/build-finway-debug.yml"
 
 permissions:
   contents: read
 
 env:
   GRADLE_VERSION: "8.7"
-  SOURCE_ZIP: "FINWAY_SOURCE_V48_2_NAVIGATION_MEMORY.zip"
+  SOURCE_ZIP: "FINWAY_SOURCE.zip"
 
 jobs:
   build:
-    name: Build Finway V48.2
+    name: Build Finway Debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
     steps:
 
       # --------------------------------------------------
-      # 1. Repository
+      # 1. Checkout
       # --------------------------------------------------
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
 
       # --------------------------------------------------
       # 2. Java 17
+      # Cache intentionally disabled.
+      # The Android project is inside the source ZIP.
       # --------------------------------------------------
       - name: Set up Java 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
 
       # --------------------------------------------------
       # 3. Android SDK
       # --------------------------------------------------
       - name: Configure Android SDK
+        shell: bash
         run: |
+          set -euo pipefail
+
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
@@ -72,16 +77,7 @@ jobs:
 
 
       # --------------------------------------------------
-      # 5. Gradle 8.7
-      # --------------------------------------------------
-      - name: Set up Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: ${{ env.GRADLE_VERSION }}
-
-
-      # --------------------------------------------------
-      # 6. Extract Finway source
+      # 5. Extract Finway source
       # --------------------------------------------------
       - name: Extract Finway source
         shell: bash
@@ -91,17 +87,31 @@ jobs:
           rm -rf .finway_source
           mkdir -p .finway_source
 
-          test -f "$SOURCE_ZIP"
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "ERROR: $SOURCE_ZIP not found."
+            echo ""
+            echo "Files in repository:"
+            ls -la
+            exit 1
+          fi
 
           unzip -q "$SOURCE_ZIP" -d .finway_source
 
           PROJECT_DIR=$(find .finway_source \
             -type f \
-            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
-            -print -quit | xargs -r dirname)
+            \( \
+              -name "settings.gradle" \
+              -o \
+              -name "settings.gradle.kts" \
+            \) \
+            -print -quit \
+            | xargs -r dirname)
 
           if [ -z "$PROJECT_DIR" ]; then
             echo "ERROR: Android project could not be found."
+            echo ""
+            echo "Extracted files:"
+            find .finway_source -maxdepth 3 -type f | head -100
             exit 1
           fi
 
@@ -109,12 +119,25 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android project:"
+          echo ""
+          echo "========================================"
+          echo "Finway Android project:"
           echo "$PROJECT_DIR"
+          echo "========================================"
 
 
       # --------------------------------------------------
-      # 7. Check source
+      # 6. Set up Gradle 8.7
+      # This is intentionally AFTER source extraction.
+      # --------------------------------------------------
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+
+      # --------------------------------------------------
+      # 7. Verify source
       # --------------------------------------------------
       - name: Verify Finway source
         working-directory: ${{ env.PROJECT_DIR }}
@@ -122,17 +145,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Project structure ==="
-          find . -maxdepth 2 -type f | head -100
-
-          echo ""
+          echo "========================================"
+          echo "Finway source verification"
+          echo "========================================"
 
           if [ ! -d "app" ]; then
             echo "ERROR: app directory not found."
             exit 1
           fi
 
-          echo "Finway Android project detected."
+          if [ ! -f "settings.gradle" ] && \
+             [ ! -f "settings.gradle.kts" ]; then
+            echo "ERROR: Gradle settings file not found."
+            exit 1
+          fi
+
+          echo "Android project detected successfully."
+
+          echo ""
+          echo "Project files:"
+          find . -maxdepth 2 -type f | head -100
 
 
       # --------------------------------------------------
@@ -149,7 +181,7 @@ jobs:
             python3 check_localization.py
           else
             echo "check_localization.py not found."
-            echo "Continuing..."
+            echo "Continuing without localization audit."
           fi
 
 
@@ -161,6 +193,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "========================================"
+          echo "Building Finway Debug APK"
+          echo "========================================"
 
           gradle \
             --no-daemon \
@@ -177,7 +213,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "=== Generated APK ==="
+          echo "========================================"
+          echo "Generated APK"
+          echo "========================================"
 
           find app/build/outputs/apk/debug \
             -type f \
@@ -190,21 +228,21 @@ jobs:
             | wc -l)
 
           if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No APK generated."
+            echo "ERROR: No Debug APK was generated."
             exit 1
           fi
 
           echo ""
-          echo "APK generated successfully."
+          echo "Debug APK generated successfully."
 
 
       # --------------------------------------------------
       # 11. Upload APK
       # --------------------------------------------------
-      - name: Upload Finway V48.2 Debug APK
+      - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: finway-v48-2-navigation-memory-debug-apk
+          name: finway-debug-apk
           path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
