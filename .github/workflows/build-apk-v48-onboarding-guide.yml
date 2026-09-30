@@ -1,0 +1,44 @@
+name: Build Finway V48 Debug APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip"
+      - ".github/workflows/build-apk-v48-onboarding-guide.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
+        run: | yes | sdkmanager --licenses >/dev/null || true sdkmanager "platforms;android-36" "build-tools;36.0.0" 
+      - name: Install Gradle 8.7
+        run: | curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip unzip -q /tmp/gradle.zip -d /tmp echo "/tmp/gradle-8.7/bin" >> "$GITHUB_PATH" 
+      - name: Extract Finway source
+        run: | test -f FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip rm -rf source mkdir source unzip -q FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip -d source 
+      - name: Check localization
+        working-directory: source
+        run: | if [ -f check_localization.py ]; then python3 check_localization.py else echo "check_localization.py not found; continuing." fi 
+      - name: Build debug APK
+        working-directory: source
+        run: | gradle --no-daemon --stacktrace :app:assembleDebug 
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: finway-v48-onboarding-guide-finbi-debug-apk
+          path: source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
