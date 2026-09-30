@@ -1,102 +1,130 @@
-name: Build Finway V48 Debug APK
+name: Build Finway V48.2 Debug APK
 
 on:
   workflow_dispatch:
 
   push:
+    branches:
+      - main
     paths:
-      - "FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip"
-      - ".github/workflows/build-apk-v48-onboarding-guide.yml"
+      - "FINWAY_SOURCE_V48_2_NAVIGATION_MEMORY.zip"
+      - ".github/workflows/build-apk-v48-2-navigation-memory.yml"
+
+permissions:
+  contents: read
+
+env:
+  GRADLE_VERSION: "8.7"
+  SOURCE_ZIP: "FINWAY_SOURCE_V48_2_NAVIGATION_MEMORY.zip"
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Finway V48.2
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
 
       # --------------------------------------------------
-      # 1. Kaynak kodu al
+      # 1. Repository
       # --------------------------------------------------
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
 
       # --------------------------------------------------
       # 2. Java 17
       # --------------------------------------------------
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
 
       # --------------------------------------------------
       # 3. Android SDK
-      # GitHub Ubuntu runner üzerinde SDK zaten mevcut.
-      # android-actions/setup-android kullanılmıyor.
       # --------------------------------------------------
       - name: Configure Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
 
 
       # --------------------------------------------------
-      # 4. Android SDK 36 ve Build Tools 36
+      # 4. Android SDK 36
       # --------------------------------------------------
       - name: Install Android SDK 36
+        shell: bash
         run: |
+          set -euo pipefail
+
           sdkmanager --version
+
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-36"
-          sdkmanager "build-tools;36.0.0"
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
 
       # --------------------------------------------------
       # 5. Gradle 8.7
       # --------------------------------------------------
-      - name: Install Gradle 8.7
-        run: |
-          curl -fsSL \
-            -o /tmp/gradle-8.7-bin.zip \
-            https://services.gradle.org/distributions/gradle-8.7-bin.zip
-
-          unzip -q /tmp/gradle-8.7-bin.zip -d /tmp
-
-          echo "/tmp/gradle-8.7/bin" >> "$GITHUB_PATH"
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
 
 
       # --------------------------------------------------
-      # 6. Finway kaynak ZIP'ini aç
+      # 6. Extract Finway source
       # --------------------------------------------------
       - name: Extract Finway source
+        shell: bash
         run: |
-          test -f FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip
+          set -euo pipefail
 
-          rm -rf source
-          mkdir -p source
+          rm -rf .finway_source
+          mkdir -p .finway_source
 
-          unzip -q \
-            FINWAY_SOURCE_V48_ONBOARDING_GUIDE_FINBI_11LANG.zip \
-            -d source
+          test -f "$SOURCE_ZIP"
+
+          unzip -q "$SOURCE_ZIP" -d .finway_source
+
+          PROJECT_DIR=$(find .finway_source \
+            -type f \
+            \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+            -print -quit | xargs -r dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: Android project could not be found."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Android project:"
+          echo "$PROJECT_DIR"
 
 
       # --------------------------------------------------
-      # 7. Kaynak yapısını kontrol et
+      # 7. Check source
       # --------------------------------------------------
-      - name: Check source structure
-        working-directory: source
+      - name: Verify Finway source
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
-          echo "=== Finway source ==="
-          pwd
-          echo ""
-          echo "=== Files ==="
+          set -euo pipefail
+
+          echo "=== Project structure ==="
           find . -maxdepth 2 -type f | head -100
+
           echo ""
 
           if [ ! -d "app" ]; then
@@ -108,26 +136,32 @@ jobs:
 
 
       # --------------------------------------------------
-      # 8. 11 dil localization kontrolü
+      # 8. Localization
       # --------------------------------------------------
-      - name: Check localization
-        working-directory: source
+      - name: Verify localization
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           if [ -f "check_localization.py" ]; then
             echo "Running localization check..."
             python3 check_localization.py
           else
             echo "check_localization.py not found."
-            echo "Continuing without localization check."
+            echo "Continuing..."
           fi
 
 
       # --------------------------------------------------
-      # 9. Debug APK oluştur
+      # 9. Build Debug APK
       # --------------------------------------------------
-      - name: Build Finway Debug APK
-        working-directory: source
+      - name: Build Debug APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           gradle \
             --no-daemon \
             --stacktrace \
@@ -135,37 +169,42 @@ jobs:
 
 
       # --------------------------------------------------
-      # 10. APK kontrolü
+      # 10. Verify APK
       # --------------------------------------------------
-      - name: Verify APK
-        working-directory: source
+      - name: Verify generated APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
-          echo "=== Generated APK files ==="
+          set -euo pipefail
+
+          echo "=== Generated APK ==="
+
           find app/build/outputs/apk/debug \
             -type f \
             -name "*.apk" \
             -print
 
-          if ! find app/build/outputs/apk/debug \
+          APK_COUNT=$(find app/build/outputs/apk/debug \
             -type f \
             -name "*.apk" \
-            | grep -q ".apk"; then
+            | wc -l)
 
-            echo "ERROR: Debug APK was not generated."
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "ERROR: No APK generated."
             exit 1
           fi
 
           echo ""
-          echo "Debug APK successfully generated."
+          echo "APK generated successfully."
 
 
       # --------------------------------------------------
-      # 11. APK'yi Artifact olarak yükle
+      # 11. Upload APK
       # --------------------------------------------------
-      - name: Upload Debug APK
+      - name: Upload Finway V48.2 Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: finway-v48-onboarding-guide-finbi-debug-apk
-          path: source/app/build/outputs/apk/debug/*.apk
+          name: finway-v48-2-navigation-memory-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
